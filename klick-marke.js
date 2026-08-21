@@ -1,7 +1,7 @@
 /* Telepski · steuer-sparmodelle.ch · Klick-Marke für Meta + LinkedIn
-   Sammelt beim Klick auf "Jetzt bestellen" Browser-Signale (fbp/fbc, li_fat_id, UTM)
-   ein, schickt sie an Make und hängt eine Sitzungs-ID als client_reference_id an
-   den Stripe-Link. Stand: 21.08.2026. */
+   Sammelt beim Klick auf "Jetzt bestellen" Browser-Signale (fbp/fbc, li_fat_id, UTM,
+   IP, User-Agent) ein, schickt sie an Make und hängt eine Sitzungs-ID als
+   client_reference_id an den Stripe-Link. Stand: 21.08.2026 (v2, EMQ-Erweiterung). */
 (function () {
   "use strict";
 
@@ -42,7 +42,7 @@
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
   }
 
-  function buildPayload(sessionId) {
+  function buildPayload(sessionId, clientIp) {
     var stored = {};
     try {
       stored = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || "{}");
@@ -59,8 +59,33 @@
       utm_campaign: stored.utm_campaign || "",
       utm_content: stored.utm_content || "",
       utm_term: stored.utm_term || "",
-      landing_url: stored.landing_url || window.location.href.split("?")[0]
+      landing_url: stored.landing_url || window.location.href.split("?")[0],
+      client_ip: clientIp || "",
+      client_user_agent: navigator.userAgent || ""
     };
+  }
+
+  function fetchClientIp(timeoutMs) {
+    if (!window.fetch || !window.AbortController) {
+      return Promise.resolve("");
+    }
+    var controller = new AbortController();
+    var timer = setTimeout(function () {
+      controller.abort();
+    }, timeoutMs);
+    return fetch("https://api.ipify.org?format=json", { signal: controller.signal })
+      .then(function (res) {
+        return res.json();
+      })
+      .then(function (json) {
+        return json && json.ip ? json.ip : "";
+      })
+      .catch(function () {
+        return "";
+      })
+      .finally(function () {
+        clearTimeout(timer);
+      });
   }
 
   function sendBeacon(payload) {
@@ -87,12 +112,14 @@
     evt.preventDefault();
 
     var sessionId = genSessionId();
-    var payload = buildPayload(sessionId);
-    sendBeacon(payload);
-
     var separator = href.indexOf("?") === -1 ? "?" : "&";
     var target = href + separator + "client_reference_id=" + encodeURIComponent(sessionId);
-    window.location.href = target;
+
+    fetchClientIp(400).then(function (clientIp) {
+      var payload = buildPayload(sessionId, clientIp);
+      sendBeacon(payload);
+      window.location.href = target;
+    });
   }
 
   function wireButtons() {
