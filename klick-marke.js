@@ -1,12 +1,15 @@
 /* Telepski · steuer-sparmodelle.ch · Klick-Marke für Meta + LinkedIn
    Sammelt beim Klick auf "Jetzt bestellen" Browser-Signale (fbp/fbc, li_fat_id, UTM,
    IP, User-Agent) ein, schickt sie an Make und hängt eine Sitzungs-ID als
-   client_reference_id an den Stripe-Link. Stand: 21.08.2026 (v2, EMQ-Erweiterung). */
+   client_reference_id an den Stripe-Link. Stand: 25.08.2026 (v3, Express-Modus für
+   Direkt-Stripe-Ads: ?express=1 löst denselben Erfassungs-Flow ohne Klick aus, für
+   Traffic, der die Seite bislang nur unsichtbar durchläuft). */
 (function () {
   "use strict";
 
   var CAPTURE_WEBHOOK_URL = "https://hook.eu1.make.com/zgn3u3tcrvp2lojdol8vo5vxq5h9rec6";
   var STRIPE_LINK_MATCH = "buy.stripe.com/5kQdRacYxbwqcQh2Vv2wU01";
+  var STRIPE_BASE_URL = "https://buy.stripe.com/5kQdRacYxbwqcQh2Vv2wU01";
   var STORAGE_KEY = "sp_klick_marke_v1";
 
   function readCookie(name) {
@@ -103,14 +106,7 @@
     }
   }
 
-  function onBuyClick(evt) {
-    var link = evt.currentTarget;
-    var href = link.getAttribute("href") || "";
-    if (href.indexOf(STRIPE_LINK_MATCH) === -1) {
-      return;
-    }
-    evt.preventDefault();
-
+  function captureAndRedirect(href) {
     var sessionId = genSessionId();
     var separator = href.indexOf("?") === -1 ? "?" : "&";
     var target = href + separator + "client_reference_id=" + encodeURIComponent(sessionId);
@@ -122,6 +118,16 @@
     });
   }
 
+  function onBuyClick(evt) {
+    var link = evt.currentTarget;
+    var href = link.getAttribute("href") || "";
+    if (href.indexOf(STRIPE_LINK_MATCH) === -1) {
+      return;
+    }
+    evt.preventDefault();
+    captureAndRedirect(href);
+  }
+
   function wireButtons() {
     var links = document.querySelectorAll('a[href*="' + STRIPE_LINK_MATCH + '"]');
     links.forEach(function (link) {
@@ -129,13 +135,26 @@
     });
   }
 
+  function maybeRunExpressMode() {
+    var params = new URLSearchParams(window.location.search);
+    if (params.get("express") !== "1") {
+      return false;
+    }
+    captureAndRedirect(STRIPE_BASE_URL);
+    return true;
+  }
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", function () {
       captureOnLoad();
-      wireButtons();
+      if (!maybeRunExpressMode()) {
+        wireButtons();
+      }
     });
   } else {
     captureOnLoad();
-    wireButtons();
+    if (!maybeRunExpressMode()) {
+      wireButtons();
+    }
   }
 })();
