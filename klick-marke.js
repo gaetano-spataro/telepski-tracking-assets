@@ -1,9 +1,9 @@
 /* Telepski · steuer-sparmodelle.ch · Klick-Marke für Meta + LinkedIn
    Sammelt beim Klick auf "Jetzt bestellen" Browser-Signale (fbp/fbc, li_fat_id, UTM,
    IP, User-Agent) ein, schickt sie an Make und hängt eine Sitzungs-ID als
-   client_reference_id an den Stripe-Link. Stand: 25.08.2026 (v3, Express-Modus für
-   Direkt-Stripe-Ads: ?express=1 löst denselben Erfassungs-Flow ohne Klick aus, für
-   Traffic, der die Seite bislang nur unsichtbar durchläuft). */
+   client_reference_id an den Stripe-Link. Stand: 25.08.2026 (v4, Beacon-Fix:
+   form-urlencoded-fetch statt sendBeacon/JSON, weil der Beacon-Body bei Make leer
+   ankam; dazu Express-Modus ?express=1 für klicklosen Direkt-Traffic). */
 (function () {
   "use strict";
 
@@ -91,19 +91,23 @@
       });
   }
 
-  function sendBeacon(payload) {
-    var body = JSON.stringify(payload);
-    if (navigator.sendBeacon) {
-      var blob = new Blob([body], { type: "application/json" });
-      navigator.sendBeacon(CAPTURE_WEBHOOK_URL, blob);
-    } else {
-      fetch(CAPTURE_WEBHOOK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: body,
-        keepalive: true
-      }).catch(function () {});
-    }
+  /* Sendet den Payload als application/x-www-form-urlencoded — bewusst NICHT als
+     JSON und NICHT via navigator.sendBeacon: sendBeacon mit Blob(application/json)
+     kam beim Make-Custom-Webhook als ungeparster/leerer Body an (nur der Zeitstempel
+     landete im Datastore, alle Felder leer). form-urlencoded ist ein CORS-"simple"
+     Content-Type (kein Preflight) und Make zerlegt es zuverlässig in {{1.feldname}}.
+     keepalive:true hält den Request über die anschliessende Weiterleitung hinweg. */
+  function sendData(payload) {
+    var params = new URLSearchParams();
+    Object.keys(payload).forEach(function (k) {
+      params.append(k, payload[k] == null ? "" : String(payload[k]));
+    });
+    return fetch(CAPTURE_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: params.toString(),
+      keepalive: true
+    }).catch(function () {});
   }
 
   function captureAndRedirect(href) {
@@ -111,10 +115,19 @@
     var separator = href.indexOf("?") === -1 ? "?" : "&";
     var target = href + separator + "client_reference_id=" + encodeURIComponent(sessionId);
 
+    var navigated = false;
+    function go() {
+      if (navigated) {
+        return;
+      }
+      navigated = true;
+      window.location.href = target;
+    }
+
     fetchClientIp(400).then(function (clientIp) {
       var payload = buildPayload(sessionId, clientIp);
-      sendBeacon(payload);
-      window.location.href = target;
+      sendData(payload).then(go, go);
+      setTimeout(go, 800);
     });
   }
 
